@@ -1,13 +1,9 @@
 from ultralytics import YOLO
 import cv2
 import numpy as np
-from deep_sort_realtime.deepsort_tracker import DeepSort
 
 # Load YOLO model
 model = YOLO("yolov8n.pt")
-
-# Initialize DeepSORT tracker
-tracker = DeepSort(max_age=30, n_init=2)  # max_age increased to remember object longer
 
 # Ask user for object to track
 COCO_CLASSES = {0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "airplane"}
@@ -25,7 +21,7 @@ if object_class_id is None:
     exit()
 
 # Open video
-video_path = 'C:/Users/DELL-7373/Desktop/Projects/Video-editing-AI/Videos/13035233_2160_3840_30fps.mp4'
+video_path = './Videos/13035233_2160_3840_30fps.mp4'
 cap = cv2.VideoCapture(video_path)
 
 # Get video properties
@@ -38,54 +34,50 @@ output_path = 'cropped_video.mp4'
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = None
 
-# Store the last known bounding box
-last_bbox = None
+# Frame skipping interval
+frame_skip = 5  # Change this for efficiency
+frame_count = 0
+last_bbox = None  # Store last known bounding box
 
 while cap.isOpened():
     success, frame = cap.read()
     if not success:
         break
 
-    # Run YOLO object detection
-    results = model(frame)
+    frame_count += 1
 
-    detections = []
-    for result in results:
-        boxes = result.boxes.xyxy.cpu().numpy()
-        classes = result.boxes.cls.cpu().numpy()
-        confidences = result.boxes.conf.cpu().numpy()
+    # Run YOLO only every 'frame_skip' frames
+    if frame_count % frame_skip == 0 or last_bbox is None:
+        results = model(frame)
 
-        for box, cls, conf in zip(boxes, classes, confidences):
-            if cls == object_class_id:  # If detected object is the one we want
-                x1, y1, x2, y2 = map(int, box)
-                detections.append(([x1, y1, x2, y2], conf, cls))  # Append bounding box
+        detections = []
+        for result in results:
+            boxes = result.boxes.xyxy.cpu().numpy()
+            classes = result.boxes.cls.cpu().numpy()
 
-    # Update tracker
-    tracks = tracker.update_tracks(detections, frame=frame)
+            for box, cls in zip(boxes, classes):
+                if cls == object_class_id:
+                    detections.append(box)
 
-    # Find best tracking box
-    best_track = None
-    for track in tracks:
-        if track.is_confirmed():
-            x1, y1, x2, y2 = map(int, track.to_ltrb())
-            best_track = (x1, y1, x2, y2)
-            break
+        # Compute bounding box around all detected objects
+        if detections:
+            detections = np.array(detections)
+            x1 = int(np.min(detections[:, 0]))
+            y1 = int(np.min(detections[:, 1]))
+            x2 = int(np.max(detections[:, 2]))
+            y2 = int(np.max(detections[:, 3]))
+            last_bbox = (x1, y1, x2, y2)
 
-    # Use the last known bounding box if tracking fails
-    if best_track:
-        last_bbox = best_track  # Update last known bounding box
-    elif last_bbox:
-        x1, y1, x2, y2 = last_bbox  # Use last known bounding box
-
+    # Use last known bounding box to crop every frame
     if last_bbox:
         x1, y1, x2, y2 = last_bbox
         bbox_width = x2 - x1
         bbox_height = y2 - y1
-        bbox_aspect_ratio = bbox_width / bbox_height
 
         # Maintain 9:16 aspect ratio
         target_aspect_ratio = 9 / 16
-        if bbox_aspect_ratio > target_aspect_ratio:
+
+        if (bbox_width / bbox_height) > target_aspect_ratio:
             new_height = int(bbox_width / target_aspect_ratio)
             y_center = (y1 + y2) // 2
             y1 = max(0, y_center - new_height // 2)
